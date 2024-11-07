@@ -2,33 +2,10 @@ package ore
 
 import (
 	"context"
-	"sync"
 )
 
 var (
-	//DisableValidation is false by default, Set to true to skip validation.
-	// Use case: you called the [Validate] function (either in the test pipeline or on application startup).
-	// So you are confident that your registrations are good:
-	//
-	//   - no missing dependencies
-	//   - no circular dependencies
-	//   - no lifetime misalignment (a longer lifetime service depends on a shorter one).
-	//
-	// You don't need Ore to validate over and over again each time it creates a new concrete.
-	// It's a waste of resource especially when you will need Ore to create milion of transient concretes
-	// and any "pico" seconds or memory allocation matter for you.
-	//
-	// In this case, you can set DisableValidation = true.
-	//
-	// This config would impact also the the [GetResolvedSingletons] and the [GetResolvedScopedInstances] functions,
-	// the returning order would be no longer guaranteed.
-	DisableValidation = false
-	lock              = &sync.RWMutex{}
-	isBuilt           = false
-	container         = map[typeID][]serviceResolver{}
-
-	//map the alias type (usually an interface) to the original types (usually implementations of the interface)
-	aliases = map[pointerTypeName][]pointerTypeName{}
+	DefaultContainer = NewContainer()
 
 	//contextKeysRepositoryID is a special context key. The value of this key is the collection of other context keys stored in the context.
 	contextKeysRepositoryID specialContextKey = "The context keys repository"
@@ -43,79 +20,64 @@ type Creator[T any] interface {
 }
 
 // Generates a unique identifier for a service resolver based on type and key(s)
-func getTypeID(pointerTypeName pointerTypeName, key []KeyStringer) typeID {
+func getTypeID(pointerTypeName pointerTypeName, key ...KeyStringer) typeID {
 	for _, stringer := range key {
 		if stringer == nil {
 			panic(nilKey)
 		}
 	}
-	return typeID{pointerTypeName, oreKey(key)}
+	return typeID{pointerTypeName, oreKey(key...)}
 }
 
 // Generates a unique identifier for a service resolver based on type and key(s)
-func typeIdentifier[T any](key []KeyStringer) typeID {
-	return getTypeID(getPointerTypeName[T](), key)
+func typeIdentifier[T any](key ...KeyStringer) typeID {
+	return getTypeID(getPointerTypeName[T](), key...)
 }
 
 // Appends a service resolver to the container with type and key
-func appendToContainer[T any](resolver serviceResolverImpl[T], key []KeyStringer) {
-	if isBuilt {
+func addResolver[T any](this *Container, resolver serviceResolverImpl[T], key ...KeyStringer) {
+	if this.isBuilt {
 		panic(alreadyBuiltCannotAdd)
 	}
 
-	typeID := typeIdentifier[T](key)
+	typeID := typeIdentifier[T](key...)
 
-	lock.Lock()
-	resolver.id = contextKey{typeID, len(container[typeID])}
-	container[typeID] = append(container[typeID], resolver)
-	lock.Unlock()
+	this.lock.Lock()
+	resolver.id = contextKey{
+		typeID:      typeID,
+		containerID: this.containerID,
+		index:       len(this.resolvers[typeID]),
+	}
+	this.resolvers[typeID] = append(this.resolvers[typeID], resolver)
+	this.lock.Unlock()
 }
 
-func replaceServiceResolver[T any](resolver serviceResolverImpl[T]) {
-	lock.Lock()
-	container[resolver.id.typeID][resolver.id.index] = resolver
-	lock.Unlock()
+func replaceResolver[T any](this *Container, resolver serviceResolverImpl[T]) {
+	this.lock.Lock()
+	this.resolvers[resolver.id.typeID][resolver.id.index] = resolver
+	this.lock.Unlock()
 }
 
-func appendToAliases[TInterface, TImpl any]() {
+func addAliases[TInterface, TImpl any](this *Container) {
 	originalType := getPointerTypeName[TImpl]()
 	aliasType := getPointerTypeName[TInterface]()
 	if originalType == aliasType {
 		return
 	}
-	lock.Lock()
-	for _, ot := range aliases[aliasType] {
+	this.lock.Lock()
+	for _, ot := range this.aliases[aliasType] {
 		if ot == originalType {
 			return //already registered
 		}
 	}
-	aliases[aliasType] = append(aliases[aliasType], originalType)
-	lock.Unlock()
+	this.aliases[aliasType] = append(this.aliases[aliasType], originalType)
+	this.lock.Unlock()
 }
 
 func Build() {
-	if isBuilt {
-		panic(alreadyBuilt)
-	}
-
-	isBuilt = true
+	DefaultContainer.Build()
 }
 
-// Validate invokes all registered resolvers. It panics if any of them fails.
-// It is recommended to call this function on application start, or in the CI/CD test pipeline
-// The objectif is to panic early when the container is bad configured. For eg:
-//
-//   - (1) Missing depedency (forget to register certain resolvers)
-//   - (2) cyclic dependency
-//   - (3) lifetime misalignment (a longer lifetime service depends on a shorter one).
 func Validate() {
-	if DisableValidation {
-		panic("Validation is disabled")
-	}
-	ctx := context.Background()
-	for _, resolvers := range container {
-		for _, resolver := range resolvers {
-			_, ctx = resolver.resolveService(ctx)
-		}
-	}
+	DefaultContainer.Validate()
 }

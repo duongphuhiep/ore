@@ -7,7 +7,7 @@ import (
 
 type KeyStringer any
 
-func oreKey(key []KeyStringer) string {
+func oreKey(key ...KeyStringer) string {
 	l := len(key)
 
 	if key == nil || l == 0 {
