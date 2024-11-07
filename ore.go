@@ -6,9 +6,10 @@ import (
 )
 
 var (
-	lock      = &sync.RWMutex{}
-	isBuilt   = false
-	container = map[typeID][]serviceResolver{}
+	DisableValidation = false
+	lock              = &sync.RWMutex{}
+	isBuilt           = false
+	container         = map[typeID][]serviceResolver{}
 
 	//map the alias type (usually an interface) to the original types (usually implementations of the interface)
 	aliases = map[pointerTypeName][]pointerTypeName{}
@@ -92,10 +93,16 @@ func Build() {
 //   - (2) cyclic dependency
 //   - (3) lifetime misalignment (a longer lifetime service depends on a shorter one).
 func Validate() {
+
 	ctx := context.Background()
 	for _, resolvers := range container {
 		for _, resolver := range resolvers {
 			_, ctx = resolver.resolveService(ctx)
 		}
 	}
+}
+
+// Reset the container, remove all the registered resolvers. For test only
+func Reset() {
+	clearAll()
 }
